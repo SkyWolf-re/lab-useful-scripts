@@ -45,12 +45,12 @@ Works with bridged/tap too - overrides `HOST_IP` to your gateway.
 
 ## Usage
 
-`gh-allow on       # LAB: GitHub-only egress + SSH from host 
-gh-allow off      # NORMAL: open egress, inbound default-drop 
-gh-allow toggle   # switch between LAB and NORMAL 
-gh-allow update   # refresh GitHub IP allowlists (run after 'on') 
-gh-allow status   # print current mode 
-gh-allow test     # quick connectivity checks`
+`gh-allow on       # LAB: GitHub-only egress + SSH from host` 
+`gh-allow off      # NORMAL: open egress, inbound default-drop` 
+`gh-allow toggle   # switch between LAB and NORMAL`
+`gh-allow update   # refresh GitHub IP allowlists (run after 'on')`
+`gh-allow status   # print current mode`
+`gh-allow test     # quick connectivity checks`
 
 ### QEMU example
 
@@ -98,12 +98,12 @@ IPv6 is supported (allowlist populated if you use it), but QEMU user-net is prim
 
 ## Quick tests
 
-`gh-allow on && gh-allow update 
-curl -4I https://github.com         # 200/301 ✅ 
-curl -4I https://google.com         # should FAIL ❌ 
-ssh -T -p 443 git@ssh.github.com    # "Permission denied (publickey)." is OK 
-gh-allow off 
-curl -4I https://google.com         # works ✅`
+`gh-allow on && gh-allow update` 
+`curl -4I https://github.com         # 200/301 ✅`
+`curl -4I https://google.com         # should FAIL ❌`
+`ssh -T -p 443 git@ssh.github.com    # "Permission denied (publickey)." is OK` 
+`gh-allow off` 
+`curl -4I https://google.com         # works ✅`
 
 ---
 
@@ -120,7 +120,8 @@ curl -4I https://google.com         # works ✅`
 
 `systemd/lab-net.service`
 
-`[Unit] 
+```
+[Unit]
   Description=QEMU Lab Net gh-allow (GitHub-only) 
   After=network-online.target 
   Wants=network-online.target  
@@ -129,7 +130,8 @@ curl -4I https://google.com         # works ✅`
   ExecStart=/usr/local/bin/gh-allow on 
   RemainAfterExit=yes  
 [Install] 
-  WantedBy=multi-user.target`
+  WantedBy=multi-user.target
+```
 
 Enable:
 
