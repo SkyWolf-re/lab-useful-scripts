@@ -77,7 +77,7 @@ check_identity() {
 
 	#Detect virt env
 	local virt="unknown" src=""
-	if command -v systemd-detect-virt >/devnull 2>&1; then
+	if command -v systemd-detect-virt >/dev/null 2>&1; then
 		if systemd-detect-virt -q; then
 			virt="$(systemd-detect-virt 2>/dev/null)" #expect qemu, kvm, vmare or others
 		else
@@ -91,7 +91,7 @@ check_identity() {
 		local pn pv
 		pn="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
 		pv="$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || true)"
-		if grep -qiE 'QEMU|KVM|VMware|VirtualBox|Xen|Hyper-V|Parallels|Bochs' < "$pn $pv"; then
+		if grep -qiE 'QEMU|KVM|VMware|VirtualBox|Xen|Hyper-V|Parallels|Bochs' <<< "$pn $pv"; then
 			virt="dmi"
 		elif grep -qi hypervisor /proc/cpuinfo 2>/dev/null; then
 			virt="generic-hypervisor"
@@ -110,10 +110,10 @@ check_identity() {
 	fi
 
 	if [[ "$EUID" -eq 0 ]]; then
-		add_result "Identity" "WARN" "VM detected - ${virt} (src=${src}) | running as root" \
+		add_result "Identity" "WARN" "VM detected - ${virt} (src=${src}) | running as root)" \
 			"Don't use root if not needed"
 	else
-		add_result "Identity" "PASS" "VM detected - ${virt} (src=${src} | user=${user_name}"
+		add_result "Identity" "PASS" "VM detected - ${virt} (src=${src} | user=${user_name})"
 	fi
 }
 
@@ -135,10 +135,11 @@ write_report_md() {
 		local anyfix=0
 		for ((i=0; i<${#RESULT_SECTION[@]}; i++)); do
 			if [[ -n "${RESULT_FIX[$i]}" ]]; then
-				anyfix=1; printf "**%s**: %s\n" "${RESULT_SECTION[$i]}" "${RESULT_FIX[$i]}"
+				anyfix=1
+				printf "**%s**: %s\n" "${RESULT_SECTION[$i]}" "${RESULT_FIX[$i]}"
 			fi
 		done
-		$anyfix || printf "_No automatic fixes suggested_\n"
+		(( $anyfix )) || printf "_No automatic fixes suggested_\n"
 	} >"$REPORT_MD"
 }
 
@@ -167,7 +168,7 @@ derive_exit_code() {
 main(){
 
 	parse_args "$@"
-	printf "lab-doctor %s starting" "${VERSION}"
+	printf "lab-doctor %s starting\n" "${VERSION}"
 
 	check_identity
 
