@@ -5,12 +5,12 @@
 #
 #Lab-doctor: pre-flight checks for all lab (constants can be changed for your own lab configuration)
 #
-VERSION="0.0.1"
+VERSION="0.0.2"
 
-set -Eeuo pipefail
+set -Euo pipefail
 PATH=/usr/sbin:/usr/bin:/sbin:/bin:$PATH
 
-REPORT_DIR="${HOME}/lab_reports"
+REPORT_DIR="${LABDOCTOR_REPORT_DIR:-/var/log/lab-doctor}"
 STAMP="$(date +%Y%m%d-%H%M)"
 REPORT_MD="${REPORT_DIR}/lab-doctor-${STAMP}.md"
 REPORT_JSON="${REPORT_DIR}/lab-doctor-${STAMP}.json"
@@ -126,7 +126,7 @@ write_report_md() {
 		printf "# lab-doctor report - %s\n\n" "$STAMP"
 		printf "Version: %s\n" "$VERSION"
 		printf "## Summary\n\n"
-		printf "| Section | Status | Details |\n|---|---|---|\n"
+		printf "| Section  |Status| Details |\n|-----------|------|---|\n"
 		local i
 		for ((i=0; i<${#RESULT_SECTION[@]}; i++)); do
 			printf "| %s | %s | %s |\n" "${RESULT_SECTION[$i]}" "${RESULT_STATUS[$i]}" "${RESULT_DETAILS[$i]}"
@@ -193,6 +193,7 @@ main(){
 	exit "$ec"
 }
 
+trap write_report_md EXIT
 main "$@"
 
 
