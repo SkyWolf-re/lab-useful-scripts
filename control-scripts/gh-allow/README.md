@@ -1,6 +1,8 @@
 # gh-allow.sh
 
-Toggle your VM’s egress between **LAB** (GitHub-only + SSH from host) and **NORMAL** (open internet) with one command.  
+Toggle your VM’s egress between **LAB** (GitHub-only + SSH from host) and **NORMAL** (open internet) with one command.
+
+The lab's net safeguards prevent accidental beaconing during detonation. It's crutial to hold an isolated environment during actual work. 
 
 ---
 ## What it does
@@ -39,7 +41,7 @@ Works with bridged/tap too - overrides `HOST_IP` to your gateway.
 
 ## Install
 
-`sudo install -m755 netmode.sh /usr/local/bin/netmode`
+`sudo install -m755 gh-allow.sh /usr/local/bin/netmode`
 
 ---
 
@@ -101,11 +103,11 @@ IPv6 is supported (allowlist populated if you use it), but QEMU user-net is prim
 
 ```
 gh-allow on && gh-allow update
-curl -4I https://github.com         # 200/301 ✅
-curl -4I https://google.com         # should FAIL ❌
+curl -4I https://github.com         # 200/301 
+curl -4I https://google.com         # should FAIL 
 ssh -T -p 443 git@ssh.github.com    # "Permission denied (publickey)." is OK 
 gh-allow off 
-curl -4I https://google.com         # works ✅
+curl -4I https://google.com         # works 
 ```
 
 ---
@@ -130,7 +132,7 @@ curl -4I https://google.com         # works ✅
   Wants=network-online.target  
 [Service] 
   Type=oneshot 
-  ExecStart=/usr/local/bin/gh-allow on 
+  ExecStart=/usr/local/bin/gh-allow.sh on 
   RemainAfterExit=yes  
 [Install] 
   WantedBy=multi-user.target
@@ -148,9 +150,8 @@ Enable:
 - **LAB blocks GitHub** → ensure `netmode update` ran _after_ `netmode on`; check sets:
     
     `sudo nft list set inet outlock gh4`
-    
-- **Using a bridge** → set `HOST_IP` to your bridge/gateway.
-
+Sometimes you'll need to re-run `gh-allow.sh on` because of dynamic IP twitching
+- **Using a bridge** → set `HOST_IP` to your bridge/gateway. 
 ---
 
 ## License
@@ -159,9 +160,6 @@ MIT. See `LICENSE`.
 
 ---
 
-## Credits
-
-Built for repeatable reverse-engineering labs on Debian/QEMU. Contributions welcome!
 ## Credits
 
 Built for repeatable reverse-engineering labs on Debian/QEMU. Contributions welcome!
