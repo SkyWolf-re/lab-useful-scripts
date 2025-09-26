@@ -32,7 +32,12 @@ table inet outlock {
   }
 
   chain output {
+   
     type filter hook output priority 0;
+    
+    oif lo meta l4proto tcp accept
+    ip daddr 127.0.0.1 meta l4proto tcp accept 	#localhost only connection
+    ip6 daddr ::1 meta l4proto tcp accept
     ct state established,related accept
     udp dport 53 ip daddr @dns4 accept
     tcp dport 53 ip daddr @dns4 accept
