@@ -67,8 +67,42 @@ csv_contains() { #"4,2,0" "2" -> 0/1 (bash return)
 
 ok() { printf "\e[32m[PASS]\e[0m %s\n" "$*"; } 
 warn() { printf "\e[33m[WARN]\e[0m %s\n" "$*"; } 
-fail() { printf "\e[31m[FAIL]\e[0m %s\n" "$*"; } 
+fail() { printf "\e[31m[FAIL]\e[0m %s\n" "$*"; }
 
+detect_lab_user() {
+  #this one's tricky, I tried to find the universal way to find the connected user each time, no matter the connection type
+  
+  #active login session (systemd)
+  if command -v loginctl >/dev/null 2>&1; then
+    # first active (TTY/ssh/graphical)
+    u=$(loginctl list-sessions --no-legend 2>/dev/null \
+        | awk '$3=="yes"{print $2}' \
+        | grep -v '^root$' | head -n1)
+    [ -n "$u" ] && { printf '%s\n' "$u"; return; }
+  fi
+
+  #currently logged-in users (ssh/tty)
+  u=$(who 2>/dev/null | awk '{print $1}' | grep -v '^root$' | head -n1)
+  [ -n "$u" ] && { printf '%s\n' "$u"; return; }
+
+  #most recently logged-in non-root (lastlog)
+  if command -v lastlog >/dev/null 2>&1; then
+    u=$(lastlog 2>/dev/null \
+        | awk 'NR>1 && $0 !~ /Never logged in/ {print $1, $NF}' \
+        | grep -v '^root ' | sort -k2,2r | head -n1 | awk '{print $1}')
+    [ -n "$u" ] && { printf '%s\n' "$u"; return; }
+  fi
+
+  #most recently touched /home directory owner
+  u=$(ls -1d /home/* 2>/dev/null \
+        | xargs -r -I{} stat -c '%Y %U' {} 2>/dev/null \
+        | sort -nr | awk 'NR==1{print $2}')
+  [ -n "$u" ] && { printf '%s\n' "$u"; return; }
+
+  #fallback: first non-system user (UID >= 1000) if REALLY nothing has worked
+  u=$(getent passwd | awk -F: '$3>=1000 && $1!="nobody"{print $1}' | head -n1)
+  printf '%s\n' "${u:-unknown}"
+}
 
 #----------------------------------------Checkers-----------------------------------------------------------------
 #main meat
@@ -102,7 +136,7 @@ check_identity() {
 	fi
 
 	#root warning
-	local user_name; user_name="$(id -un)"
+	local user_name; user_name="$(detect_lab_user)"
 	if [[ "$virt" == "none" ]]; then
 		add_result "Identity" "WARN" "Physical machine detected - src=${src} user=${user_name}" \
 			"Proceed only if this is an intentional workflow. Run live samples on bare metal only if you fully understand the impact" #or if you're not a bozo
@@ -126,7 +160,7 @@ write_report_md() {
 		printf "# lab-doctor report - %s\n\n" "$STAMP"
 		printf "Version: %s\n" "$VERSION"
 		printf "## Summary\n\n"
-		printf "| Section  |Status| Details |\n|-----------|------|---|\n"
+		printf "| Section  |Status| Details \n|----------|------|\n"
 		local i
 		for ((i=0; i<${#RESULT_SECTION[@]}; i++)); do
 			printf "| %s | %s | %s |\n" "${RESULT_SECTION[$i]}" "${RESULT_STATUS[$i]}" "${RESULT_DETAILS[$i]}"

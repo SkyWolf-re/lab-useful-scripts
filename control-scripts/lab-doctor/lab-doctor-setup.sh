@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
 #
 #Author: Skywolf
-#Date: 17-09-2025
+#Date: 2025-09-17 | Last modified: 2025-10-03
 #
 #Basic setup script to create lab-doctor user who owns all reports for accessibility
 #
 
 set -euo pipefail
 
+#added to test easily new changed without disabling manually
+sudo systemctl stop lab-doctor.service 2>/dev/null || true
+sudo systemctl stop lab-doctor.timer   2>/dev/null || true
+
 DIR=${1:-/var/log/lab-doctor}
 
 install -m 0755 lab-doctor.sh /usr/local/bin/lab-doctor
 
-id -u lab-doctor >/dev/null 2>&1 || sudo useradd -r -s /usr/sbin/nologin lab-doctor
-install -d -o lab-doctor -g lab-doctor -m 1777 "$DIR"
+id -u lab-doctor >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin lab-doctor 2>/dev/null
+install -d -o lab-doctor -g lab-doctor -m 0750 "$DIR"
 
 printf 'export LABDOCTOR_REPORT_DIR=%q\n' "$DIR" | tee /etc/profile.d/labdoctor.sh >/dev/null
 chmod 644 /etc/profile.d/labdoctor.sh
@@ -30,28 +34,35 @@ ConditionPathIsExecutable=/usr/local/bin/lab-doctor
 
 [Service]
 Type=oneshot
+User=lab-doctor
+Group=lab-doctor
 Environment=LABDOCTOR_REPORT_DIR=${DIR}
+ReadWritePaths=${DIR}
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
 ExecStart=/usr/local/bin/lab-doctor
 EOF
 
-cat >/etc/systemd/system/lab-doctor@.timer <<'EOF'
+cat >/etc/systemd/system/lab-doctor.timer <<'EOF'
 [Unit]
-Description=Periodic Lab Doctor run for %i
+Description=Periodic Lab Doctor run
 
 [Timer]
-OnBootSec=2m
-OnUnitActiveSec=24h
-Unit=lab-doctor@%i.service
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+Unit=lab-doctor.service
 
 [Install]
 WantedBy=timers.target
 EOF
 
-systemctl --global enable lab-doctor.service
-systemctl start lab-doctor.service
-
-if [[ -n "${2:-}" ]]; then
-	systemctl enable --now lab-doctor@${2}.timer
-fi
-
 systemctl daemon-reload
+systemctl enable --now lab-doctor.timer
+systemctl start lab-doctor.service
