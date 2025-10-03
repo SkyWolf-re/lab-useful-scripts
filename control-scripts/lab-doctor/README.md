@@ -39,10 +39,10 @@ Place the script somewhere on your `PATH` and make it executable:
 sudo install -m755 lab-doctor.sh /usr/local/bin/lab-doctor
 ```
 
-Create the reports directory (first run will also create it):
+Launch the setup script for automatic reports:
 
 ```bash
-mkdir -p ~/lab_reports
+sudo ./lab-doctor-setup.sh [optional path for reports dir - /var/log/lab-doctor/ by default]
 ```
 
 ---
@@ -92,8 +92,8 @@ Flags are parsed in `parse_args` and stored in `FLAG_*` variables for later expa
 
 ## Output
 
-* Markdown report at: `~/lab_reports/lab-doctor-YYYYMMDD-HHMM.md` (created on each run).
-* JSON report path is reserved for a future `--json` flag (`~/lab_reports/lab-doctor-YYYYMMDD-HHMM.json`).&#x20;
+* Markdown report at: `[lab-doctor-dir]/lab-doctor-YYYYMMDD-HHMM.md` (created on each run).
+* JSON report path is reserved for a future `--json` flag (`[lab-doctor-dir]lab-doctor-YYYYMMDD-HHMM.json`).&#x20;
 
 ---
 
