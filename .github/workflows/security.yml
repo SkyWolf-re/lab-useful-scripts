@@ -1,0 +1,67 @@
+name: Security & Lint
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Prep Debian
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            git ca-certificates curl unzip jq shellcheck ripgrep
+          update-ca-certificates
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install gitleaks (static)
+        env:
+          GL_VERSION: "8.18.4"
+        run: |
+          set -euo pipefail
+          curl -sSLo /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GL_VERSION}/gitleaks_${GL_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: ShellCheck (bash/sh)
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find . -type f -name '*.sh' -not -path '*/.git/*')
+          if (( ${#files[@]} )); then
+            for f in "${files[@]}"; do
+              echo "::group::ShellCheck $f"
+              shellcheck -x "$f"
+              echo "::endgroup::"
+            done
+          else
+            echo "No shell scripts found."
+          fi
+
+      - name: Secret scan (Gitleaks)
+        run: |
+          set -euo pipefail
+          gitleaks detect --no-banner --redact --verbose --source .
+
+      - name: Heuristic greps (quick sanity)
+        run: |
+          set -euo pipefail
+          # Obvious secrets / key materials
+          rg -n --hidden --glob '!**/.git/**' \
+            '(BEGIN [A-Z ]*PRIVATE KEY|password=|api[_-]?key|token=|Authorization:|sshpass|-----BEGIN)' || true
+          # Hardcoded IPs/ports (reviewable, not necessarily bad)
+          rg -n --hidden --glob '!**/.git/**' \
+            '\b((25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(25[0-5]|2[0-4]\d|[01]?\d?\d)\b|:[0-9]{2,5}\b' || true
+
