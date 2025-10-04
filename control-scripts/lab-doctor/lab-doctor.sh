@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
 #Author: SkyWolf
-#Date: 14-09-2025
+#Date: 2025-09-14 | Last modified: 2025-10-03
 #
 #Lab-doctor: pre-flight checks for all lab (constants can be changed for your own lab configuration)
 #
-VERSION="0.0.2"
+VERSION="0.0.3"
 
 set -Euo pipefail
 PATH=/usr/sbin:/usr/bin:/sbin:/bin:$PATH
@@ -58,7 +58,7 @@ add_result() {
 #----------------------------------------Misc--------------------------------------------------------------------
 run_to() { #<timeout-sec>
 	local t="$1"; shift
-	timeot --preserve-status "${t}"s "$@" 2>&1 || true
+	timeout --preserve-status "${t}"s "$@" 2>&1 || true
 }
 
 csv_contains() { #"4,2,0" "2" -> 0/1 (bash return)
@@ -102,6 +102,27 @@ detect_lab_user() {
   #fallback: first non-system user (UID >= 1000) if REALLY nothing has worked
   u=$(getent passwd | awk -F: '$3>=1000 && $1!="nobody"{print $1}' | head -n1)
   printf '%s\n' "${u:-unknown}"
+}
+
+#cache to store repeatable sequences to gain time
+declare -A CACHE
+cache() {
+	local k="$1"; shift
+	if [[ -z "${CACHE[$k]+x}" ]]; then
+		CACHE[$k]="$("$@" 2>/dev/null || true)"
+	fi
+	printf '%s' "${CACHE[$k]}"
+}
+
+grep_once() {
+	local pat="$1"; shift
+	local n
+	n=$(grep -RIE --"$pat" "$@" 2>/dev/null | wc -l)
+	[[ "$n" -eq 1 ]]
+}
+
+esc_pipes() {
+	sed 's/|/\\|/g'
 }
 
 #----------------------------------------Checkers-----------------------------------------------------------------
@@ -151,6 +172,117 @@ check_identity() {
 	fi
 }
 
+check_ssh() {
+  	
+  	local status="PASS"
+  	local note=() fix=()
+
+  	#config parses
+  	local parse_out
+  	parse_out="$(run_to 3 sshd -t)"
+  	if [[ -n "$parse_out" ]]; then
+		if systemctl is-active --quiet ssh || systemctl is-active --quiet sshd; then
+			note+=("config=ok") #checking for false positives
+		else
+			status="FAIL"
+			note+=("config_error=$(printf '%s' "$parse_out" | head -1)")
+		fi
+	fi
+	if ! ls /etc/ssh/ssh_host_*key >/dev/null 2>&1; then
+    		status="FAIL"
+    		note+=("config_error=$(printf '%s' "$parse_out" | head -1)")
+		if grep -qi 'no hostkeys available' <<<"$parse_out"; then
+			fix+=("Generate host keys: sudo ssh-keygen -A && sudo systemctl restart ssh")
+		else
+    			fix+=("Review sshd_config (tip: sshd -t shows first error)")
+		fi
+	fi
+
+  	#effective port from sshd -T (cached)
+  	local T port
+  	T="$(cache sshdT sshd -T)"
+  	port="$(printf '%s\n' "$T" | awk '/^port /{print $2; exit}')"
+  	: "${port:=22}"
+
+  	#service active
+  	if systemctl is-active --quiet ssh; then
+    		note+=("service=active")
+  	else
+    		status="FAIL"
+    		note+=("service=inactive")
+    		fix+=("Enable service: systemctl enable --now ssh")
+  	fi
+
+  	#listening on the chosen port
+  	if ss -lntp 2>/dev/null | awk '{print $4}' | grep -qE "(^|:)${port}$"; then
+    		note+=("listen=:${port}")
+  	else
+    		status="FAIL"
+    		note+=("listen=missing(:${port})")
+  	fi
+
+  	#SFTP subsystem exactly once
+  	if grep_once '^\s*Subsystem\s\+sftp\b' /etc/ssh/sshd_config /etc/ssh/sshd_config.d; then
+    		note+=("sftp=ok")
+  	else
+    		status="WARN"
+    		note+=("sftp=missing_or_duplicate")
+    		fix+=("Ensure single line: Subsystem sftp /usr/lib/openssh/sftp-server")
+  	fi
+
+  	#AllowTcpForwarding (VS Code needs this)
+  	if printf '%s\n' "$T" | grep -qi '^allowtcpforwarding yes$'; then
+    		note+=("forwarding=yes")
+  	else
+    		status="WARN"
+    		note+=("forwarding=no")
+    		fix+=("Set AllowTcpForwarding yes (keep GatewayPorts no)")
+  	fi
+
+  	#priv-sep dir
+  	if [[ -d /run/sshd ]]; then
+    		note+=("privsep=/run/sshd")
+  	else
+    		status="WARN"
+    		note+=("privsep=missing")
+    		fix+=("Create via systemd override: RuntimeDirectory=sshd")
+  	fi
+
+  	#nft loopback egress (best-effort; needs sudo -n)
+  	local rs table chain
+ 	table="${LAB_NFT_TABLE:-outlock}"
+  	chain="${LAB_NFT_OUTPUT_CHAIN:-output}"
+  	rs="$(sudo -n nft list ruleset 2>/dev/null || true)"
+  	if [[ -n "$rs" ]]; then
+    		if printf '%s' "$rs" | grep -A40 -E "table inet ${table}\b" \
+       		| grep -A80 -E "chain ${chain}\b" \
+       		| grep -qE 'oif\s+lo|daddr\s+127\.0\.0\.1|::1'; then
+      			note+=("nft_lo_egress=ok")
+    		else
+      			status="WARN"
+      			note+=("nft_lo_egress=missing")
+      			fix+=("Add in ${table}/${chain}: oif lo accept; ip daddr 127.0.0.1 accept; ip6 daddr ::1 accept")
+    		fi
+  	else
+    		note+=("nft_lo_egress=unchecked(no_sudo)")
+  	fi
+
+  	#optional host→guest forward hint
+  	if [[ -n "${LAB_EXPECTED_HOST_SSH:-}" ]]; then
+    		note+=("host_forward=${LAB_EXPECTED_HOST_SSH}->:${port}")
+  	fi
+
+	#bBuild details
+	details="sshd active & listening on :${port}; $(IFS='; '; echo "${note[*]}")"
+	# Sanitize for table
+	details="${details//$'\r'/}"
+	details="${details//$'\n'/ }"
+	details="$(printf '%s' "$details" | sed 's/|/\\|/g' | sed -e 's/  \+/ /g' -e 's/^ *//; s/ *$//')"
+	fixes=""
+	((${#fix[@]})) && fixes="$(IFS='- '; echo "${fix[*]}")"
+
+	add_result "  SSH   " "$status" "$details" "$fixes"
+}
 
 #----------------------------------------Report Writers-----------------------------------------------------------------
 write_report_md() {
@@ -205,7 +337,8 @@ main(){
 	printf "lab-doctor %s starting\n" "${VERSION}"
 
 	check_identity
-
+	check_ssh
+	
 	#optional auto-fix later
 	
 	write_report_md
