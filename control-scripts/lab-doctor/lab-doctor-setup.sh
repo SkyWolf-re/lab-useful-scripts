@@ -55,8 +55,9 @@ cat >/etc/systemd/system/lab-doctor.timer <<'EOF'
 Description=Periodic Lab Doctor run
 
 [Timer]
-OnCalendar=*-*-* 03:00:00
-Persistent=true
+OnBootSec=5m
+OnUnitActiveSec=24h
+RandomizedDelaySec=10m
 Unit=lab-doctor.service
 
 [Install]

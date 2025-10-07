@@ -13,12 +13,12 @@ Repeatable analysis needs a clean, predictable lab. `lab-doctor` catches the eas
 
 ## Status
 
-* **Version:** `0.0.1` (skeleton)&#x20;
+* **Version:** `0.0.3` (skeleton)&#x20;
 * **Implemented today:**
 
   * Identity & Context (detect virtualization, warn on root)
-  * Report aggregator + Markdown report (`~/lab_reports/lab-doctor-YYYYMMDD-HHMM.md`)&#x20;
-* **Planned next:** SSH readiness, hardening guard-rails, storage & snapshots, tools baseline (see Roadmap).
+  * SSH & SSHD configuration
+  * Report aggregator + Markdown report (`/var/log/lab-doctor/lab-doctor-YYYYMMDD-HHMM.md`)&#x20;
 
 ---
 
@@ -73,12 +73,43 @@ Flags are parsed in `parse_args` and stored in `FLAG_*` variables for later expa
   * **WARN** — VM detected but running as root (suggests using a non-root user).
   * **WARN** — No VM detected: proceed on bare metal only if this is intentional and you fully understand the risk/behavior.
 
+### ✅ Implemented: SSH
+
+Checks that `sshd` is ready for remote dev and reasonably configured.
+
+**Policy (what sets the status):**
+
+- **PASS**
+  - `sshd` is **active** and **listening** on the effective port (default `:22`);
+  - config parses cleanly (`sshd -t`), and:
+    - `Subsystem sftp` is present **exactly once**;
+    - `AllowTcpForwarding yes`;
+    - privilege separation dir `/run/sshd` exists;
+    - loopback egress rule found in nftables (if readable with sudo).
+
+- **WARN**
+  - `Subsystem sftp` **missing or duplicate**.
+  - `AllowTcpForwarding no` (VS Code Remote needs forwarding).
+  - Priv-sep dir **missing** (suggest `RuntimeDirectory=sshd`).
+  - nftables loopback egress rule **missing** (when `nft list ruleset` is readable).
+    - If nft can’t be read without sudo: noted as `nft_lo_egress=unchecked(no_sudo)` (no status change).
+
+- **FAIL**
+  - Service **inactive** (`systemctl is-active ssh[ d ]` fails).
+  - Not **listening** on the effective port (e.g., `listen=missing(:22)`).
+  - Config **error** and daemon not active (e.g., `sshd -t` reports an error and service isn’t running).
+  - **No host keys** present (`/etc/ssh/ssh_host_*key` missing).
+    - Suggested fix: `sudo ssh-keygen -A && sudo systemctl restart ssh`.
+
+**Notes the report may include (do not affect status):**
+- `service=active`, `listen=:22`, `config=ok`.
+- `sftp=ok`, `forwarding=yes`, `privsep=/run/sshd`, `nft_lo_egress=ok`.
+- `nft_lo_egress=unchecked(no_sudo)` when nftables state can’t be read without sudo.
+- Optional hint: `host_forward=127.0.0.1:xxxx->:22` if `LAB_EXPECTED_HOST_SSH` is set.
+
 ### 🔜 Planned (Roadmap)
 
-* **SSH readiness**
-
-  * `sshd` active & listening on `:22`; host forward configured (`127.0.0.1:2222 → :22`).
-* **Hardening guard-rails**
+* **Hardering guard-rails**
 
   * AppArmor enforcing; sysctls: `kptr_restrict=2`, `dmesg_restrict=1`, `ptrace_scope=2`, `unprivileged_bpf_disabled=1`, `unprivileged_userns_clone=0`; core-dump policy; `noexec` mount for staging.
 * **Storage & snapshots**
@@ -163,7 +194,7 @@ Debian 12 (bookworm) inside QEMU with user-net (slirp)
 
 * The script uses strict mode: `set -Eeuo pipefail`.
 * Results are stored in parallel arrays (`RESULT_SECTION`, `RESULT_STATUS`, `RESULT_DETAILS`, `RESULT_FIX`) and rendered to Markdown in `write_report_md`. Use `${#ARRAY[@]}` for lengths and guard optional values with `${var:-}`.&#x20;
-* `main` currently runs `check_identity`, writes the report, prints a console summary, and exits. This scaffolding is ready for new checks to be added one function at a time.&#x20;
+* `main` currently runs `check_identity`, `check_ssh`, writes the report, prints a console summary, and exits. This scaffolding is ready for new checks to be added one function at a time.&#x20;
 
 ---
 
@@ -174,5 +205,4 @@ MIT. See `LICENSE`.
 ---
 
 ## Credits
-Built for repeatable reverse-engineering labs on Debian/QEMU. Contributions welcome!
-
+Built for repeatable reverse-engineering labs on Debian/QEMU. Contributions welcome!  
