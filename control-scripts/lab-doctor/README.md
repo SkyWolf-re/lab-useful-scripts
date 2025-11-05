@@ -13,11 +13,12 @@ Repeatable analysis needs a clean, predictable lab. `lab-doctor` catches the eas
 
 ## Status
 
-* **Version:** `0.0.3` (skeleton)&#x20;
+* **Version:** `0.0.4` (skeleton)&#x20;
 * **Implemented today:**
 
   * Identity & Context (detect virtualization, warn on root)
   * SSH & SSHD configuration
+  * Disk (HARDENING): Checks free space on /, $HOME, and /var/log
   * Report aggregator + Markdown report (`/var/log/lab-doctor/lab-doctor-YYYYMMDD-HHMM.md`)&#x20;
 
 ---
@@ -50,7 +51,7 @@ sudo ./lab-doctor-setup.sh [optional path for reports dir - /var/log/lab-doctor/
 ## Usage
 
 ```bash
-lab-doctor            # full run (skeleton today runs Identity check + writes report)
+lab-doctor            # full run (skeleton today runs checks + writes report)
 lab-doctor --fast     # (reserved) faster run
 lab-doctor --tools-only
 lab-doctor --json     # (reserved) also emit JSON
@@ -107,6 +108,18 @@ Checks that `sshd` is ready for remote dev and reasonably configured.
 - `nft_lo_egress=unchecked(no_sudo)` when nftables state can’t be read without sudo.
 - Optional hint: `host_forward=127.0.0.1:xxxx->:22` if `LAB_EXPECTED_HOST_SSH` is set.
 
+### ✅ Implemented: Disk (HARDENING)
+
+Checks free space on key local mounts (`/`, `$HOME`, `/var/log`) without sudo, using a single `df` call.
+
+**Policy:**
+- **PASS** — all targets have **> 15%** free.
+- **WARN** — any target has **≤ 15%** free.
+- **FAIL** — any target has **≤ 5%** free.
+
+Notes show only low-space mounts (e.g., `root=12%free(…); varlog=4%free(…)`).  
+Thresholds can be tuned via env: `LAB_DISK_WARN_PCT` (default **15**), `LAB_DISK_FAIL_PCT` (default **5**).
+
 ### 🔜 Planned (Roadmap)
 
 * **Hardering guard-rails**
@@ -130,13 +143,24 @@ Checks that `sshd` is ready for remote dev and reasonably configured.
 
 ## Exit codes
 
-Skeleton currently derives an exit code placeholder and will expand as sections are added:
+`lab-doctor` returns a **bitmask** exit code so multiple issues can be encoded at once:
 
-* `0` — OK
-* `10` — Identity/context (set)
-* `20` — Hardening (planned)
-* `30` — Tools (planned)
-* `40+` — Multiple/other criticals (planned)&#x20;
+| Bit | Value | Meaning                 |
+|-----|------:|-------------------------|
+| 0   |     1 | At least one **WARN**   |
+| 1   |     2 | **IDENTITY** failed     |
+| 2   |     4 | **SSH** failed          |
+| 3   |     8 | **HARDENING** failed    |
+
+- **0** -> all PASS/INFO  
+- **>0** -> combine bits (e.g., `5` = `4+1` = SSH fail + warnings)
+
+**Examples:** `0` OK - `1` warnings only - `2` IDENTITY fail - `4` SSH fail - `12` SSH+HARDENING fail.
+
+**CI usage:** treat any code with bits **other than 1** as failure:  
+- pass: `ec == 0`  
+- warnings-only: `(ec & ~1) == 0 && (ec & 1)`  
+- fail: `(ec & ~1) != 0`
 
 ---
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
 #Author: SkyWolf
-#Date: 2025-09-14 | Last modified: 2025-10-03
+#Date: 2025-09-14 | Last modified: 2025-11-05
 #
 #Lab-doctor: pre-flight checks for all lab (constants can be changed for your own lab configuration)
 #
-VERSION="0.0.3"
+VERSION="0.0.4"
 
 set -Euo pipefail
 PATH=/usr/sbin:/usr/bin:/sbin:/bin:$PATH
@@ -56,6 +56,20 @@ add_result() {
 }
 
 #----------------------------------------Misc--------------------------------------------------------------------
+count_status() {
+  # prints: "<pass> <warn> <fail> <info>"
+  local p=0 w=0 f=0 n=0 i
+  for (( i=0; i<${#RESULT_STATUS[@]}; i++ )); do
+    case "${RESULT_STATUS[i]}" in
+      PASS) ((p++)) ;;
+      WARN) ((w++)) ;;
+      FAIL) ((f++)) ;;
+      INFO) ((n++)) ;;
+    esac
+  done
+  printf '%d %d %d %d\n' "$p" "$w" "$f" "$n"
+}
+
 run_to() { #<timeout-sec>
 	local t="$1"; shift
 	timeout --preserve-status "${t}"s "$@" 2>&1 || true
@@ -159,16 +173,16 @@ check_identity() {
 	#root warning
 	local user_name; user_name="$(detect_lab_user)"
 	if [[ "$virt" == "none" ]]; then
-		add_result "Identity" "WARN" "Physical machine detected - src=${src} user=${user_name}" \
+		add_result "IDENTITY " "WARN" "Physical machine detected - src=${src} user=${user_name}" \
 			"Proceed only if this is an intentional workflow. Run live samples on bare metal only if you fully understand the impact" #or if you're not a bozo
 		return
 	fi
 
 	if [[ "$EUID" -eq 0 ]]; then
-		add_result "Identity" "WARN" "VM detected - ${virt} (src=${src}) | running as root)" \
+		add_result "IDENTITY " "WARN" "VM detected - ${virt} (src=${src}) | running as root)" \
 			"Don't use root if not needed"
 	else
-		add_result "Identity" "PASS" "VM detected - ${virt} (src=${src} | user=${user_name})"
+		add_result "IDENTITY " "PASS" "VM detected - ${virt} (src=${src} | user=${user_name})"
 	fi
 }
 
@@ -281,7 +295,99 @@ check_ssh() {
 	fixes=""
 	((${#fix[@]})) && fixes="$(IFS='- '; echo "${fix[*]}")"
 
-	add_result "  SSH   " "$status" "$details" "$fixes"
+	add_result "  SSH    " "$status" "$details" "$fixes"
+}
+
+check_disk() {
+	local status="PASS" note=() fix=()
+
+	local warn_pct=${LAB_DISK_WARN_PCT-15}
+	local fail_pct=${LAB_DISK_FAIL_PCT-5}
+	[[ $warn_pct =~ ^[0-9]+$ ]] || warn_pct=15
+	[[ $fail_pct =~ ^[0-9]+$ ]] || fail_pct=5
+	(( fail_pct < warn_pct )) || fail_pct=$(( warn_pct > 5 ? warn_pct - 5 : 1 ))
+
+  	#dedup & resolve
+  	local -a targets=("/")
+	[[ -n "${HOME:-}" ]] && targets+=("$HOME")
+	targets+=("/var/log")
+
+	local -a paths=() p r
+	for p in "${targets[@]}"; do
+		[[ -d "$p" ]] || continue
+		r="$(readlink -f -- "$p" 2>/dev/null || printf '%s' "$p")"
+		# de-dup
+		local seen=0 q
+		for q in "${paths[@]}"; do [[ "$q" == "$r" ]] && { seen=1; break; }; done
+		(( seen )) || paths+=("$r")
+	done
+	((${#paths[@]})) || { add_result "$section" "INFO" "no paths to check" ""; return; }
+
+	# Try GNU df fast-path
+	local have_gnu=0
+	df --version 2>/dev/null | grep -q 'GNU coreutils' && have_gnu=1
+
+	if (( have_gnu )); then
+		# One df call; -l = local filesystems only; --output is stable to parse
+		# Columns: target size avail pcent (Use%)
+		local line tgt size_k avail_k pcent used free_h size_h pct_free
+		# shellcheck disable=SC2207
+		mapfile -t _df < <(df -Pkl --output=target,size,avail,pcent -- "${paths[@]}" 2>/dev/null | tail -n +2)
+		for line in "${_df[@]}"; do
+		read -r tgt size_k avail_k pcent _ <<<"$(printf '%s\n' "$line" | tr -s ' ')"
+		pcent=${pcent%%%}                    
+		pct_free=$((100 - pcent))
+		size_h=$(human_kib "$size_k")
+		free_h=$(human_kib "$avail_k")
+
+		if (( pct_free <= fail_pct )); then
+			status="$(bump_status "$status" "FAIL")"
+			note+=("$(basename "$tgt")=${pct_free}%free(${free_h}/${size_h})")
+			case "$tgt" in
+			/var/log) fix+=("Free logs: sudo journalctl --vacuum-time=7d && sudo journalctl --vacuum-size=100M") ;;
+			"$HOME")  fix+=("Review & clean ~/.cache, Downloads (manually)") ;;
+			/)       fix+=("Clean apt cache: sudo apt-get clean; remove old kernels; clear /tmp") ;;
+			*)       fix+=("Inspect large dirs in $tgt: sudo du -hxd1 $tgt | sort -h | tail") ;;
+			esac
+		elif (( pct_free <= warn_pct )); then
+			status="$(bump_status "$status" "WARN")"
+			note+=("$(basename "$tgt")=${pct_free}%free(${free_h}/${size_h})")
+			case "$tgt" in
+			/var/log) fix+=("Trim logs: sudo journalctl --vacuum-time=14d") ;;
+			"$HOME")  fix+=("Review big files in \$HOME") ;;
+			/)       fix+=("apt-get clean; review /var/cache and /tmp") ;;
+			esac
+		fi
+		done
+	else
+		#POSIX fallback
+		local fs size_k used_k avail_k usep mnt pct_free free_h size_h
+		for p in "${paths[@]}"; do
+		read -r fs size_k used_k avail_k usep mnt < <(df -P -k "$p" | awk 'NR==2{print $1,$2,$3,$4,$5,$6}')
+		usep=${usep%%%}; pct_free=$((100 - usep))
+		size_h=$(human_kib "$size_k"); free_h=$(human_kib "$avail_k")
+		if (( pct_free <= fail_pct )); then
+			status="$(bump_status "$status" "FAIL")"
+			note+=("$(basename "$p")=${pct_free}%free(${free_h}/${size_h})")
+		elif (( pct_free <= warn_pct )); then
+			status="$(bump_status "$status" "WARN")"
+			note+=("$(basename "$p")=${pct_free}%free(${free_h}/${size_h})")
+		fi
+		done
+	fi
+
+	# shorty
+	local details
+	if ((${#note[@]})); then
+		details="low space → $(IFS='; '; echo "${note[*]}")"
+	else
+		details="all targets healthy (free > ${warn_pct}%)"
+	fi
+
+	local fixes=""
+	((${#fix[@]})) && fixes="$(IFS='; '; echo "${fix[*]}")"
+
+	add_result "HARDERING" "$status" "$details" "$fixes"
 }
 
 #----------------------------------------Report Writers-----------------------------------------------------------------
@@ -292,7 +398,7 @@ write_report_md() {
 		printf "# lab-doctor report - %s\n\n" "$STAMP"
 		printf "Version: %s\n" "$VERSION"
 		printf "## Summary\n\n"
-		printf "| Section  |Status| Details \n|----------|------|\n"
+		printf "|  Section  |Status| Details \n|-----------|------|\n"
 		local i
 		for ((i=0; i<${#RESULT_SECTION[@]}; i++)); do
 			printf "| %s | %s | %s |\n" "${RESULT_SECTION[$i]}" "${RESULT_STATUS[$i]}" "${RESULT_DETAILS[$i]}"
@@ -306,6 +412,10 @@ write_report_md() {
 			fi
 		done
 		(( $anyfix )) || printf "_No automatic fixes suggested_\n"
+		local pass warn fail info ec
+    	read -r pass warn fail info < <(count_status)
+    	ec="$(derive_exit_code)"
+    	printf "Summary: PASS=%d WARN=%d FAIL=%d (exit %s)\n\n" "$pass" "$warn" "$fail" "$ec"
 	} >"$REPORT_MD"
 }
 
@@ -313,21 +423,27 @@ write_report_md() {
 
 
 #----------------------------------------EXIT-codes-----------------------------------------------------------------
-# 0 OK, 10 identity, 20 hardering, 30 tools, 40+ multiple
-# Planned for later in full implementation - now serves as a skeleton. Surely will change later
-
 derive_exit_code() {
-	local code=0
-	for i in "${!RESULTS_SECTION[@]}"; do
-		case "${RESULT_SECTION[$i]}:${RESULT_STATUS[$i]}" in
-			Identity:FAIL)	code=$(( code | 10 )) ;;
-			#...
-		esac
-	done
-	echo "${code}"
+  local code=0 cat st i
+
+  for (( i=0; i<${#RESULT_SECTION[@]}; i++ )); do
+    st=${RESULT_STATUS[i]}
+    cat=${RESULT_SECTION[i]%:*}   
+
+    case "$st" in
+      WARN) code=$(( code | 1 )) ;;  # any warning flips bit 0
+      FAIL)
+        case "$cat" in
+          IDENTITY)  code=$(( code | 2 )) ;;
+          SSH)       code=$(( code | 4 )) ;;
+          HARDENING) code=$(( code | 8 )) ;;
+        esac
+        ;;
+    esac
+  done
+
+  printf '%d\n' "$code"
 }
-
-
 
 #-------Main--------
 
@@ -338,6 +454,7 @@ main(){
 
 	check_identity
 	check_ssh
+	check_disk
 	
 	#optional auto-fix later
 	
@@ -354,9 +471,13 @@ main(){
 
 	local ec
 	ec="$(derive_exit_code)"
-	if [[ "$ec" -eq 0 ]]; then ok "Verdict: Ready to bang";
-	else fail "Verdict: issues detected (exit $ec)";
+	if [[ "$ec" -eq 0 ]]; then
+  		ok   "Verdict: Ready to bang"
 	fi
+	{
+  		read -r p w f _ < <(count_status)
+  		printf "Summary: PASS=%d WARN=%d FAIL=%d (exit %s)\n" "$p" "$w" "$f" "$ec"
+	} >&2
 	exit "$ec"
 }
 
