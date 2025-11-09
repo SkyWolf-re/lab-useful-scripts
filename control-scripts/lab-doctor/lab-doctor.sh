@@ -5,7 +5,7 @@
 #
 #Lab-doctor: pre-flight checks for all lab (constants can be changed for your own lab configuration)
 #
-VERSION="0.0.4"
+VERSION="0.0.5"
 
 set -Euo pipefail
 PATH=/usr/sbin:/usr/bin:/sbin:/bin:$PATH
@@ -137,6 +137,38 @@ grep_once() {
 
 esc_pipes() {
 	sed 's/|/\\|/g'
+}
+
+# semver-ish compare: ver_ge A B  -> returns 0 if A >= B
+ver_ge() {
+  # normalize to "x.y.z" numeric triplets for sort -V
+  local a="${1:-0}" b="${2:-0}"
+  [[ "$(printf '%s\n%s\n' "$b" "$a" | sort -V | tail -n1)" == "$a" ]]
+}
+
+# first token that looks like a version from a banner line
+ver_of() {
+  local cmd="$1" rx="${2:-[0-9]+([.][0-9A-Za-z-]+)*}"
+  command -v "$cmd" >/dev/null 2>&1 || { echo ""; return 1; }
+  "$cmd" --version 2>/dev/null | head -n1 | grep -oE "$rx" | head -n1
+}
+
+# - appends "name=got" to note[]; if got < min, appends "<min" tag and a fix
+# - returns 0 if OK, 1 if outdated, 2 if missing
+note_or_need() {
+  local name="$1" got="$2" min="$3"
+  if [[ -z "$got" ]]; then
+    fix+=("$name"); miss+=("$name")
+    return 2
+  fi
+  if ver_ge "$got" "$min"; then
+    note+=("$name=$got")
+    return 0
+  else
+    note+=("$name=${got}<${min}")
+    fix+=("$name>=$min")
+    return 1
+  fi
 }
 
 #----------------------------------------Checkers-----------------------------------------------------------------
@@ -390,6 +422,89 @@ check_disk() {
 	add_result "HARDERING" "$status" "$details" "$fixes"
 }
 
+check_tools() {
+	local status="PASS"
+	local note=() fix=() miss=()
+
+	#compilers /build
+	local gcc_v clang_v cmake_v meson_v ninja_v
+	gcc_v="$(ver_of gcc)"      || miss+=("gcc")
+	clang_v="$(ver_of clang)"  || miss+=("clang")
+	cmake_v="$(ver_of cmake)"  || miss+=("cmake")
+	meson_v="$(ver_of meson)"  || miss+=("meson")
+	ninja_v="$(ver_of ninja)"  || miss+=("ninja")
+
+	note_or_need gcc     "$gcc_v"   10    || status="WARN"
+	note_or_need clang   "$clang_v" 12    || status="WARN"
+	note_or_need cmake   "$cmake_v" 3.20  || status="WARN"
+	note_or_need meson   "$meson_v" 0.60  || status="WARN"
+	note_or_need ninja   "$ninja_v" 1.10  || status="WARN"
+
+	#debuggers
+	local gdb_v lldb_v
+	gdb_v="$(ver_of gdb)"      || miss+=("gdb")
+	lldb_v="$(ver_of lldb)"    || miss+=("lldb")
+
+	note_or_need gdb     "$gdb_v"   12    || status="WARN"
+	note_or_need lldb    "$lldb_v"  12    || status="WARN"
+
+	# Python
+	local py_v pip_v
+	py_v="$(python3 -V 2>/dev/null | awk '{print $2}')" || true
+	pip_v="$(pip3 --version 2>/dev/null | awk '{print $2}')" || true
+	note_or_need python3 "$py_v"    3.10  || status="WARN"
+	if [[ -n "$pip_v" ]]; then note+=("pip3=$pip_v"); else fix+=("python3-pip"); status="WARN"; fi
+
+	#RE stack
+	local rizin_v cutter_p ghidra_p java_v
+	rizin_v="$(ver_of rizin)" || true
+	cutter_p=$(command -v cutter 2>/dev/null || true)
+	ghidra_p=$(command -v ghidraRun 2>/dev/null || echo "${GHIDRA_INSTALL_DIR:-}")
+	java_v="$(ver_of java)" || true
+
+	note_or_need rizin   "$rizin_v" 0.6   || status="WARN"
+	[[ -n "$cutter_p" ]] && note+=("cutter=ok") || { fix+=("cutter"); status="WARN"; }
+	if [[ -n "$ghidra_p" ]]; then
+		note+=("ghidra=ok")
+		if [[ -n "$java_v" ]]; then
+			note_or_need java "$java_v" 17 || status="WARN"
+		else
+			fix+=("java>=17 for Ghidra"); status="WARN"
+		fi
+	else
+		fix+=("ghidra"); status="WARN"
+	fi
+
+	#YARA
+	local yara_v
+	yara_v="$(ver_of yara)" || true
+	note_or_need yara    "$yara_v"  4.0   || status="WARN"
+
+	#networking/perf
+	local tcpdump_v tshark_v perf_p bpftrace_v
+	tcpdump_v="$(ver_of tcpdump)" || true
+	tshark_v="$(ver_of tshark)"   || true
+	perf_p=$(command -v perf 2>/dev/null || true)
+	bpftrace_v="$(ver_of bpftrace)" || true
+
+	note_or_need tcpdump "$tcpdump_v" 4.9 || status="WARN"
+	note_or_need tshark  "$tshark_v" 4.0  || status="WARN"
+	[[ -n "$perf_p" ]] && note+=("perf=ok") || { fix+=("linux-tools (perf)"); status="WARN"; }
+	note_or_need bpftrace "$bpftrace_v" 0.14 || status="WARN"
+
+	# ---------- status derive ----------
+	# If any critical tool missing -> WARN
+	if ((${#miss[@]})) || ((${#fix[@]})); then
+		[[ "$status" == "PASS" ]] && status="WARN"
+	fi
+
+	local details fixes=""
+	details="$(IFS=';'; echo "${note[*]}")"
+	((${#fix[@]})) && fixes="$(IFS='; '; echo "${fix[*]}")"
+	add_result "  TOOLS  " "$status" "$details" "$fixes"
+}
+
+
 #----------------------------------------Report Writers-----------------------------------------------------------------
 write_report_md() {
 
@@ -452,9 +567,14 @@ main(){
 	parse_args "$@"
 	printf "lab-doctor %s starting\n" "${VERSION}"
 
-	check_identity
-	check_ssh
-	check_disk
+	if [[ "${FLAG_TOOLS_ONLY:-0}" -eq 1 ]]; then
+    	check_tools
+  	else
+    	check_identity
+    	check_ssh
+    	check_disk
+    	check_tools                   
+  	fi
 	
 	#optional auto-fix later
 	
@@ -483,5 +603,3 @@ main(){
 
 trap write_report_md EXIT
 main "$@"
-
-

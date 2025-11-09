@@ -120,6 +120,19 @@ Checks free space on key local mounts (`/`, `$HOME`, `/var/log`) without sudo, u
 Notes show only low-space mounts (e.g., `root=12%free(…); varlog=4%free(…)`).  
 Thresholds can be tuned via env: `LAB_DISK_WARN_PCT` (default **15**), `LAB_DISK_FAIL_PCT` (default **5**).
 
+### ✅ Implemented: Tools baseline 
+
+Verifies presence/versions of:   
+- Compilers (gcc/clang/cmake/meson/ninja)  
+- Debuggers (gdb/lldb)  
+- RE stack (rizin/Cutter/Ghidra + Java ≥ 17)  
+- YARA (+rules path if set)  
+- Networking (tcpdump/tshark)  
+- perf/bpftrace  
+- Python3/pip   
+
+`--tools-only` runs only this check  
+
 ### 🔜 Planned (Roadmap)
 
 * **Hardering guard-rails**
@@ -128,9 +141,6 @@ Thresholds can be tuned via env: `LAB_DISK_WARN_PCT` (default **15**), `LAB_DISK
 * **Storage & snapshots**
 
   * Free space thresholds; `cleanbase` snapshot present; not accidentally running with `-snapshot`.
-* **Tools baseline**
-
-  * Presence/versions: compilers (gcc/clang/cmake/meson/ninja), debuggers (gdb/lldb), RE stack (rizin/Cutter/Ghidra + Java ≥17), YARA (+rules path), networking (tcpdump/tshark), perf/bpftrace, Python3/pip.
 
 ---
 
@@ -218,7 +228,7 @@ Debian 12 (bookworm) inside QEMU with user-net (slirp)
 
 * The script uses strict mode: `set -Eeuo pipefail`.
 * Results are stored in parallel arrays (`RESULT_SECTION`, `RESULT_STATUS`, `RESULT_DETAILS`, `RESULT_FIX`) and rendered to Markdown in `write_report_md`. Use `${#ARRAY[@]}` for lengths and guard optional values with `${var:-}`.&#x20;
-* `main` currently runs `check_identity`, `check_ssh`, writes the report, prints a console summary, and exits. This scaffolding is ready for new checks to be added one function at a time.&#x20;
+* `main` currently runs `check_identity`, `check_ssh`, `check_disk`, writes the report, prints a console summary, and exits. This scaffolding is ready for new checks to be added one function at a time.&#x20;
 
 ---
 
